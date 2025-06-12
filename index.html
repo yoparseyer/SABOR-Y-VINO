@@ -1,0 +1,261 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Cash Flow Tracker</title>
+  <link rel="manifest" href="manifest.json">
+  <meta name="theme-color" content="#1976d2">
+  <style>
+    body { font-family: Arial, sans-serif; margin: 0; background: #f4f6f8; }
+    .container { max-width: 500px; margin: 0 auto; padding: 1em; background: #fff; min-height: 100vh; }
+    h1 { color: #1976d2; text-align: center; }
+    form { display: flex; flex-direction: column; gap: 0.5em; margin-bottom: 1em; }
+    label { font-weight: bold; }
+    input, select { padding: 0.5em; border: 1px solid #ccc; border-radius: 4px; }
+    button { background: #1976d2; color: #fff; border: none; padding: 0.7em; border-radius: 4px; font-size: 1em; cursor: pointer; }
+    button:hover { background: #125ea2; }
+    .tabs { display: flex; gap: 1em; justify-content: center; margin-bottom: 1em; }
+    .tab { cursor: pointer; padding: 0.5em 1em; border-radius: 4px; background: #e3eaf2; }
+    .tab.active { background: #1976d2; color: #fff; }
+    table { width: 100%; border-collapse: collapse; margin-bottom: 1em; }
+    th, td { border: 1px solid #ddd; padding: 0.5em; text-align: center; }
+    th { background: #1976d2; color: #fff; }
+    .summary { background: #e3eaf2; padding: 1em; border-radius: 4px; margin-bottom: 1em; }
+    canvas { background: #fff; border-radius: 4px; }
+    @media (max-width: 600px) {
+      .container { padding: 0.5em; }
+      table, th, td { font-size: 0.9em; }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Cash Flow Tracker</h1>
+    <div class="tabs">
+      <div class="tab active" id="tab-hand">Cash on Hand</div>
+      <div class="tab" id="tab-bank">Cash in Bank</div>
+    </div>
+    <form id="entry-form">
+      <label for="date">Date</label>
+      <input type="date" id="date" required>
+      <label for="desc">Description</label>
+      <input type="text" id="desc" required>
+      <label for="type">Type</label>
+      <select id="type" required>
+        <option value="in">Cash In</option>
+        <option value="out">Cash Out</option>
+      </select>
+      <label for="amount">Amount</label>
+      <input type="number" id="amount" min="0.01" step="0.01" required>
+      <button type="submit">Add Entry</button>
+    </form>
+    <div class="summary" id="summary"></div>
+    <canvas id="chart" width="400" height="200"></canvas>
+    <table>
+      <thead>
+        <tr>
+          <th>Date</th>
+          <th>Description</th>
+          <th>Cash In</th>
+          <th>Cash Out</th>
+          <th>Balance</th>
+        </tr>
+      </thead>
+      <tbody id="entries"></tbody>
+    </table>
+  </div>
+  <script>
+    // --- PWA Service Worker Registration ---
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('sw.js');
+      });
+    }
+
+    // --- App Logic ---
+    const tabHand = document.getElementById('tab-hand');
+    const tabBank = document.getElementById('tab-bank');
+    const entryForm = document.getElementById('entry-form');
+    const entriesTbody = document.getElementById('entries');
+    const summaryDiv = document.getElementById('summary');
+    const chartCanvas = document.getElementById('chart');
+
+    let currentTab = 'hand'; // 'hand' or 'bank'
+    let data = {
+      hand: JSON.parse(localStorage.getItem('cashflow_hand') || '[]'),
+      bank: JSON.parse(localStorage.getItem('cashflow_bank') || '[]')
+    };
+
+    function saveData() {
+      localStorage.setItem('cashflow_hand', JSON.stringify(data.hand));
+      localStorage.setItem('cashflow_bank', JSON.stringify(data.bank));
+    }
+
+    function renderTable() {
+      const entries = data[currentTab];
+      let html = '';
+      let balance = 0;
+      entries.forEach(entry => {
+        if (entry.type === 'in') balance += entry.amount;
+        else balance -= entry.amount;
+        html += `<tr>
+          <td>${entry.date}</td>
+          <td>${entry.desc}</td>
+          <td>${entry.type === 'in' ? entry.amount.toFixed(2) : ''}</td>
+          <td>${entry.type === 'out' ? entry.amount.toFixed(2) : ''}</td>
+          <td>${balance.toFixed(2)}</td>
+        </tr>`;
+      });
+      entriesTbody.innerHTML = html;
+    }
+
+    function renderSummaryAndChart() {
+      const entries = data[currentTab];
+      let totalIn = 0, totalOut = 0, balance = 0;
+      let daily = {};
+      entries.forEach(entry => {
+        if (!daily[entry.date]) daily[entry.date] = {in:0, out:0};
+        if (entry.type === 'in') {
+          totalIn += entry.amount;
+          daily[entry.date].in += entry.amount;
+          balance += entry.amount;
+        } else {
+          totalOut += entry.amount;
+          daily[entry.date].out += entry.amount;
+          balance -= entry.amount;
+        }
+      });
+      summaryDiv.innerHTML = `
+        <b>Total Cash In:</b> ${totalIn.toFixed(2)}<br>
+        <b>Total Cash Out:</b> ${totalOut.toFixed(2)}<br>
+        <b>Current Balance:</b> ${balance.toFixed(2)}
+      `;
+
+      // Draw chart
+      const ctx = chartCanvas.getContext('2d');
+      ctx.clearRect(0,0,chartCanvas.width,chartCanvas.height);
+      // Prepare data
+      const dates = Object.keys(daily).sort();
+      const sales = dates.map(d=>daily[d].in);
+      const expenses = dates.map(d=>daily[d].out);
+      // Draw axes
+      ctx.strokeStyle = '#888';
+      ctx.beginPath();
+      ctx.moveTo(40,10); ctx.lineTo(40,180); ctx.lineTo(390,180); ctx.stroke();
+      // Draw bars
+      const max = Math.max(...sales, ...expenses, 1);
+      dates.forEach((d,i)=>{
+        const x = 50 + i*40;
+        const yIn = 180 - (sales[i]/max)*150;
+        const yOut = 180 - (expenses[i]/max)*150;
+        // Sales bar
+        ctx.fillStyle = '#4caf50';
+        ctx.fillRect(x, yIn, 15, 180-yIn);
+        // Expenses bar
+        ctx.fillStyle = '#f44336';
+        ctx.fillRect(x+18, yOut, 15, 180-yOut);
+        // Date label
+        ctx.fillStyle = '#333';
+        ctx.font = '10px Arial';
+        ctx.fillText(d.slice(5), x, 195);
+      });
+      // Legend
+      ctx.fillStyle = '#4caf50'; ctx.fillRect(300,20,10,10);
+      ctx.fillStyle = '#333'; ctx.fillText('Cash In', 315, 30);
+      ctx.fillStyle = '#f44336'; ctx.fillRect(360,20,10,10);
+      ctx.fillStyle = '#333'; ctx.fillText('Cash Out', 375, 30);
+    }
+
+    function render() {
+      renderTable();
+      renderSummaryAndChart();
+    }
+
+    entryForm.onsubmit = function(e) {
+      e.preventDefault();
+      const date = document.getElementById('date').value;
+      const desc = document.getElementById('desc').value;
+      const type = document.getElementById('type').value;
+      const amount = parseFloat(document.getElementById('amount').value);
+      if (!date || !desc || !amount) return;
+      data[currentTab].push({date, desc, type, amount});
+      data[currentTab].sort((a,b)=>a.date.localeCompare(b.date));
+      saveData();
+      render();
+      entryForm.reset();
+    };
+
+    tabHand.onclick = function() {
+      currentTab = 'hand';
+      tabHand.classList.add('active');
+      tabBank.classList.remove('active');
+      render();
+    };
+    tabBank.onclick = function() {
+      currentTab = 'bank';
+      tabBank.classList.add('active');
+      tabHand.classList.remove('active');
+      render();
+    };
+
+    // Initial render
+    render();
+  </script>
+  <!-- Service Worker and Manifest for PWA -->
+  <script>
+    // Create manifest.json on the fly for demo purposes
+    if (!window.location.href.startsWith('file://')) {
+      fetch('manifest.json').catch(() => {
+        const manifest = {
+          "name": "Cash Flow Tracker",
+          "short_name": "CashFlow",
+          "start_url": ".",
+          "display": "standalone",
+          "background_color": "#1976d2",
+          "theme_color": "#1976d2",
+          "icons": [
+            {
+              "src": "https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/72x72/1f4b0.png",
+              "sizes": "192x192",
+              "type": "image/png"
+            }
+          ]
+        };
+        const blob = new Blob([JSON.stringify(manifest)], {type: 'application/json'});
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('link');
+        link.rel = 'manifest';
+        link.href = url;
+        document.head.appendChild(link);
+      });
+    }
+    // Create a simple service worker for offline support
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('sw.js').catch(() => {
+        // If sw.js doesn't exist, create a simple one on the fly
+        const sw = `
+          self.addEventListener('install', e => self.skipWaiting());
+          self.addEventListener('activate', e => self.clients.claim());
+          self.addEventListener('fetch', e => {
+            e.respondWith(
+              caches.open('cf-pwa').then(cache =>
+                cache.match(e.request).then(resp =>
+                  resp || fetch(e.request).then(r => {
+                    cache.put(e.request, r.clone());
+                    return r;
+                  })
+                )
+              )
+            );
+          });
+        `;
+        const blob = new Blob([sw], {type: 'application/javascript'});
+        const url = URL.createObjectURL(blob);
+        navigator.serviceWorker.register(url);
+      });
+    }
+  </script>
+</body>
+</html>
